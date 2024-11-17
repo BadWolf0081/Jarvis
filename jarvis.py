@@ -20,11 +20,11 @@ NOTIFY_ROLE_ID = 123456789  # Role ID to notify in the notification channel
 # Database connection function with custom port support
 def get_db_connection():
     return mysql.connector.connect(
-        host="127.0.0.1",  # Your database host
-        user="jarvis",  # Your database username
-        password="jarvispass",  # Your database password
+        host="localhost",  # Your database host
+        user="user",  # Your database username
+        password="pass",  # Your database password
         database="cache_db",  # The database to use
-        port=6668,  # The custom port, if you're using one
+        port=3306,  # The custom port, if you're using one
         charset='utf8mb4',  # Ensure the correct charset
         collation='utf8mb4_unicode_ci'  # Use a compatible collation
     )
