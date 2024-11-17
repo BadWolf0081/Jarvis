@@ -8,3 +8,16 @@
 
 UPDATE
  Now supports DB storage of info so please use new script to copy data into db and be sure to update db fields for proper function.
+
+CREATE DATABASE IF NOT EXISTS cache_db;
+
+USE cache_db;
+
+CREATE TABLE IF NOT EXISTS word_list (
+    message_id BIGINT PRIMARY KEY,
+    word VARCHAR(30) NOT NULL,
+    user VARCHAR(255) NOT NULL,
+    active BOOLEAN DEFAULT TRUE,
+    removed_at DATETIME NULL,
+    time DATETIME NOT NULL
+);
