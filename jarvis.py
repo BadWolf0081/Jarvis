@@ -1,9 +1,8 @@
 import discord
-import json
-import os
-import asyncio
 from datetime import datetime
 from discord.ext import commands, tasks
+import mysql.connector
+import asyncio
 
 # Bot setup
 intents = discord.Intents.default()
@@ -13,48 +12,97 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Configuration
 CACHE_FILE = "word_list_cache.json"
-MONITOR_CHANNEL_ID = 123456789  # Channel to monitor for valid words
-LIST_CHANNEL_ID = 123456789  # Channel to post the word list
-NOTIFY_CHANNEL_ID = 123456789  # Channel to notify role of new posts
+MONITOR_CHANNEL_ID = 1234567891011  # Channel to monitor for valid words
+LIST_CHANNEL_ID = 12345678910112  # Channel to post the word list
+NOTIFY_CHANNEL_ID = 12345678910113  # Channel to notify role of new posts
 NOTIFY_ROLE_ID = 123456789  # Role ID to notify in the notification channel
 
-# Data storage
-word_list = {}
+# Database connection function with custom port support
+def get_db_connection():
+    return mysql.connector.connect(
+        host="127.0.0.1",  # Your database host
+        user="jarvis",  # Your database username
+        password="jarvispass",  # Your database password
+        database="cache_db",  # The database to use
+        port=6668,  # The custom port, if you're using one
+        charset='utf8mb4',  # Ensure the correct charset
+        collation='utf8mb4_unicode_ci'  # Use a compatible collation
+    )
 
-# Load cached words and message IDs on startup
-def load_cache():
-    global word_list
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r") as file:
-            word_list = json.load(file)
-    else:
-        word_list = {}
+# Load active codes from the database
+def load_active_codes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT message_id, word, user, time FROM word_list WHERE active = TRUE")
+    active_codes = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return active_codes
 
-# Save current word list to cache
-def save_cache():
-    with open(CACHE_FILE, "w") as file:
-        json.dump(word_list, file)
+# Insert a new code into the database (with active status)
+def insert_code_to_db(message_id, word, user, timestamp):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Insert new word with active status as True and no removal time
+    cursor.execute("""
+        INSERT INTO word_list (message_id, word, user, time, active)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (message_id, word, user, timestamp, True))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Mark a code as inactive (and set removed_at timestamp)
+def mark_code_inactive(message_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Update the code to be inactive and set the removal time
+    cursor.execute("""
+        UPDATE word_list
+        SET active = FALSE, removed_at = NOW()
+        WHERE message_id = %s
+    """, (message_id,))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# Flag to prevent multiple list updates
+updating_list = False
 
 @bot.event
 async def on_ready():
     print(f"{bot.user} is now online!")
-    load_cache()
-    await update_list_channel()
-    check_deleted_messages.start()
+    await update_list_channel()  # Update the word list on startup
+    check_deleted_messages.start()  # Start checking for deleted messages periodically
 
 async def update_list_channel():
     """Update the word list in the specified list channel."""
+    global updating_list
+    if updating_list:
+        return  # Prevent redundant updates
+
+    updating_list = True
+
     list_channel = bot.get_channel(LIST_CHANNEL_ID)
     if not list_channel:
         print("List channel not found")
+        updating_list = False
         return
 
-    # Split word_list into 1900-character chunks and send each as a separate message
+    # Fetch active words from the database
+    active_codes = load_active_codes()
+
+    # Split active codes into 1900-character chunks and send each as a separate message
     message_content = ""
     messages = []
 
-    for data in word_list.values():
-        word_entry = f"```{data['word']}``` by {data['user']} at {data['time']}\n"
+    for row in active_codes:
+        message_id, word, user, timestamp = row
+        word_entry = f"```{word}``` by {user} at {timestamp}\n"
         if len(message_content + word_entry) > 1900:
             messages.append(message_content)
             message_content = word_entry
@@ -64,12 +112,15 @@ async def update_list_channel():
     if message_content:  # Append the remaining content
         messages.append(message_content)
 
-    # Delete previous messages and send updated messages
+    # Delete previous messages
     async for msg in list_channel.history(limit=500):
         await msg.delete()
 
+    # Send each chunk as a new message
     for i, content in enumerate(messages):
         await list_channel.send(f"**Passcode List - Part {i + 1}:**\n{content}")
+
+    updating_list = False  # Allow future updates after the current update
 
 @bot.event
 async def on_message(message):
@@ -81,12 +132,9 @@ async def on_message(message):
     if message.content.isalnum() and 5 <= len(message.content) <= 30:
         word = message.content.upper()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        word_list[message.id] = {
-            "word": word,
-            "time": timestamp,
-            "user": str(message.author)
-        }
-        save_cache()
+
+        # Insert into the database
+        insert_code_to_db(message.id, word, str(message.author), timestamp)
 
         # Notify in the notification channel with uppercase word, timestamp, and user mention
         notify_channel = bot.get_channel(NOTIFY_CHANNEL_ID)
@@ -101,17 +149,23 @@ async def on_message(message):
 
 @bot.event
 async def on_message_delete(message):
-    """Remove a word from the list if the message is deleted."""
-    if message.id in word_list:
-        del word_list[message.id]
-        save_cache()
-        await update_list_channel()
+    """Mark a word as inactive when the message is deleted."""
+    if message.id:
+        mark_code_inactive(message.id)  # Mark the code as inactive in the database
+        await update_list_channel()  # Only update list if necessary
 
 @tasks.loop(seconds=5)
 async def check_deleted_messages():
-    """Periodically check for deleted messages from cached IDs."""
+    """Periodically check for deleted messages from the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT message_id FROM word_list WHERE active = TRUE")
+    active_ids = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
     deleted_ids = []
-    for message_id in list(word_list.keys()):
+    for message_id, in active_ids:
         try:
             # Attempt to fetch the message; if it fails, it was deleted
             channel = bot.get_channel(MONITOR_CHANNEL_ID)
@@ -120,12 +174,11 @@ async def check_deleted_messages():
             # Mark the message as deleted
             deleted_ids.append(message_id)
 
-    # Remove deleted messages from the word list and update cache and list channel
+    # Remove deleted messages from the database and update list channel
     for message_id in deleted_ids:
-        del word_list[message_id]
+        mark_code_inactive(message_id)  # Mark as inactive in the database
     if deleted_ids:
-        save_cache()
-        await update_list_channel()
+        await update_list_channel()  # Only update if there were deleted messages
 
 # Run the bot with your token
-bot.run("YOUR_CODE_HERE")
+bot.run("YOUR_TOKEN")
