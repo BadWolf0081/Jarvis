@@ -5,3 +5,6 @@
 4.  python jarvis.py
 
    will generate a new list and start notifying of new valid codes as they come in.  Will remove codes from the list if their original message is deleted from the monitor channel.
+
+UPDATE
+ Now supports DB storage of info so please use new script to copy data into db and be sure to update db fields for proper function.
