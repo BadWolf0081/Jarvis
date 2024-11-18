@@ -13,11 +13,13 @@ CREATE DATABASE IF NOT EXISTS cache_db;
 
 USE cache_db;
 
-CREATE TABLE IF NOT EXISTS word_list (
-    message_id BIGINT PRIMARY KEY,
+CREATE TABLE word_list (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    message_id BIGINT NOT NULL,
     word VARCHAR(30) NOT NULL,
     user VARCHAR(255) NOT NULL,
+    time DATETIME NOT NULL,
     active BOOLEAN DEFAULT TRUE,
-    removed_at DATETIME NULL,
-    time DATETIME NOT NULL
+    removed_at DATETIME DEFAULT NULL,
+    UNIQUE (word)
 );
